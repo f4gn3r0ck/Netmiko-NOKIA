@@ -1,0 +1,82 @@
+# This is a Network Automation Python script that accesses multiple devices via SSH and executes a list of commands contained in an external file [commands.txt]. 
+# This file receives all the commands that you want to execute on each router that has its IPs saved in another external file [ips.txt].
+# For the script to work, you need to:
+# Install the latest version of Python from the website.
+# Install the necessary libraries: netmiko, time and re.
+# Adjust the directories where the outputs [which I call LOG] will be saved, each with their respective hostnames.
+# It is possible to manipulate the name of the file where the outputs [LOGs] will be saved and also the destination folder by simply making small changes to the code.
+
+from concurrent.futures import ThreadPoolExecutor
+from netmiko import ConnectHandler, redispatch
+import time
+import re
+# Create netmiko debug file for error checking
+import logging
+logging.basicConfig(filename='LOG_AFTER.log', level=logging.DEBUG)
+logger = logging.getLogger("netmiko")
+# Answer Yes if the router asks about the keys
+def handle_ssh_yes_no_prompt(net_connect):
+    output = net_connect.read_channel()
+    if 'yes/no' in output:
+        net_connect.write_channel('yes\n')
+        time.sleep(1)
+# List of IPs of the routers that will receive the commands
+with open('C:\\GERA-LOGS\\ips.txt', 'r') as f:                  #LOCAL for IPs to access
+    ip_list = [line.strip() for line in f]
+# Data from NSP/SAM Server as SSH Tunnel
+Nokia = {
+    'device_type': 'terminal_server',
+    'ip': 'x.x.x.x',
+    'username': 'user',
+    'password': 'passw',
+    'port': 22,
+    'global_delay_factor': 4,
+    'banner_timeout': 120,
+    'timeout': 100,
+}
+# Hostname handling
+def remove_characters(text):
+    text = re.sub(r"^\*", "", text)
+    text = re.sub(r"[A-Za-z]:", "", text)
+    text = re.sub(r"\W$", "", text)
+    return text
+# Function to execute commands
+def execute_commands(ip_final):
+# Open the report file in write mode to clear previous content
+    with open('relatorio.txt', 'w') as relatorio_file:           #THIS FILE CONTAIN A SUMMARY OF THE CONNECTIONS SUCCESSFULY AND NOT
+        pass
+    with ConnectHandler(**Nokia) as net_connect:
+        net_connect.write_channel(f"ssh-keygen -R {ip_final}\n")
+        net_connect.write_channel(f"ssh -o StrictHostKeyChecking=no deviceuser@{ip_final}\n")   #HERE CAN BE A LOCAL USER, TACACS OR RADIUS. THE CREDENTIALS FOR ACCESS THE ROUTERS (DEVICES) MAYBE DIFFERENT FROM SAM/NSP USER/PASSW
+        time.sleep(3)
+        output = net_connect.read_channel()
+        if 'password' in output:
+            net_connect.write_channel('deviceuserpass\n')                       #THE PASSWORD FOR THE USER FOR ACCESS THE ROUTERS (DEVICES)
+            time.sleep(3)
+        output += net_connect.read_channel()
+# Remove the * from routers whose configuration is not saved
+        match = re.search(r'([\w\-*]+[#>])', output)
+        if match:
+            prt = match.group(1)
+            print(f"Running LOG LATER commands on the router:  {prt}")
+            file_name = remove_characters(str(prt))
+            redispatch(net_connect, device_type='alcatel_sros')
+            net_connect.ip = ip_final
+            commands_file = 'commands.txt'
+            new_output = net_connect.send_config_from_file(commands_file, read_timeout=0)
+            output_file_path = f'C:\\GERA-LOGS\\DEPOIS\\LOG_DEPOIS_{file_name}.txt'           #FILE THAT WILL RECEIVE THE OUTPUTS
+            with open(output_file_path, 'w') as output_file:
+                output_file.write(new_output)
+            print(f"LOG saved with sucess: {output_file_path}")
+        else:
+            print(f"UNABLE TO ACCESS EQUIPMENT!: {ip_final}")
+# Add the following lines to write the details to the report file
+            with open('relatorio.txt', 'a') as relatorio_file:
+                relatorio_file.write(f"Commands not executed on the router:  {ip_final}\n")
+# Use ThreadPoolExecutor for parallel execution
+with ThreadPoolExecutor(max_workers=75) as executor:                                          #MAYBE NEED TO INCREASE THIS VALUE IF THE NUMBER OF SIMULTANEOUS IS HIGH
+    executor.map(execute_commands, ip_list)
+# Check if all commands were executed successfully
+with open('relatorio.txt', 'a') as relatorio_file:
+    if 'Comandos não executados' not in open('relatorio.txt').read():
+        relatorio_file.write("The commands were executed on all routers!\n")
